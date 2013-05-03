@@ -1,14 +1,17 @@
+require 'rubygems/commands/build_command'
+require 'rubygems/commands/install_command'
+
 class Gem::Commands::InsturlCommand < Gem::Command
 
   def initialize
     super "insturl", "Install a gem from a URL"
 
-    add_option("--git", "use `git clone' to fetch the URL") do |value, options|
+    add_option("--git", "use `git clone' to fetch the URL") do |val, opt|
       options[:git] = true
     end
 
-    add_option("--force", "install even if already installed") do |value, options|
-      options[:force] = true
+    add_option("--override", "install even if already exists") do |val, opt|
+      options[:override] = true
     end
   end
 
@@ -17,22 +20,30 @@ class Gem::Commands::InsturlCommand < Gem::Command
 The insturl command installs a gem from a URL.
 
 Examples:
-* gem insturl http://foo.com/bar.gem
-* gem insturl http://foo.com/bar.tar.gz
-* gem insturl --git http://foo.com/bar.git
+  * gem insturl http://foo.com/bar.gem
+  * gem insturl http://foo.com/bar.tar.gz
+  * gem insturl --git http://foo.com/bar.git
 
-If --git is specified, the gem is fetched by `git clone URL`;
-otherwise it is downloaded with `wget` (you must have wget in PATH)
+Download:
+  If --git is specified, the URL is treated as a repository and cloned
+  with `git`; otherwise it is treated as a package file and downloaded
+  with `wget`. You must have git or wget installed in PATH.
 
-If the URL ends with .gem, it is directly installed after download.
-If it is a git repository or .zip/.tar.gz package, then it must have
-a valid *gemspec* file in top level directory.
+Installation:
+  If --git is omitted and the URL ends with .gem, it is installed with
+  `gem install` directly after download.
+
+  If the URL is a repository or .zip/.tar.gz package, it must have a
+  valid *gemspec* file in top level directory. A gem is built from the
+  gemspec file and then installed.
 EOF
   end
   
   def arguments
-    "URL        location of the package or git repository\n" +
-    "           If --git not set, URL should end with .gem/.zip/.tar.gz"
+    <<EOF
+URL        location of the package or git repository
+           If --git not set, URL should end with .gem/.zip/.tar.gz
+EOF
   end
   
   def usage
@@ -44,7 +55,7 @@ EOF
     require 'fileutils'
 
     url = options[:args].first
-    raise ArgumentError.new("URL is missing") if url.nil?
+    raise Gem::Exception.new("URL is missing") if url.nil?
 
     # check package format
     unless options[:git]
@@ -52,7 +63,7 @@ EOF
       unless pkgname.end_with? ".gem" or
              pkgname.end_with? ".zip" or
              pkgname.end_with? ".tar.gz"
-        raise ArgumentError.new("unsupported package format")
+        raise Gem::Exception.new("unsupported package format")
       end
     end
 
@@ -66,23 +77,22 @@ EOF
         end
       else
         Dir.chdir dir do
-          # download the package
+          # download
           return unless system("wget -O #{pkgname} #{url}")
 
-          # install the package
           if pkgname.end_with? ".gem"
-            system("gem install #{pkgname}")
-          elsif pkgname.end_with? ".zip"
-            return unless ok system("unzip #{pkgname}")
-
-            dir2 = File.basename pkgname, ".zip"
-            Dir.chdir dir2 do
-              install_gemspec
+            install_gem pkgname
+          else
+            # extract
+            if pkgname.end_with? ".zip"
+              return unless system("unzip #{pkgname}")
+            else
+              return unless system("tar xzf #{pkgname}")
             end
-          elsif pkgname.end_with? ".tar.gz"
-            return unless system("tar xzf #{pkgname}")
 
-            dir2 = File.basename pkgname, ".tar.gz"
+            # get dirname (FIXME)
+            dir2 = File.basename pkgname, ".zip"
+
             Dir.chdir dir2 do
               install_gemspec
             end
@@ -99,30 +109,60 @@ EOF
     # find gemspec file
     gemspecs = Dir['*.gemspec']
     if gemspecs.size == 0
-      raise ArgumentError.new("gemspec not found")
+      raise Gem::Exception.new("gemspec not found")
     elsif gemspecs.size > 1
-      raise ArgumentError.new("multiple gemspecs found")
+      raise Gem::Exception.new("multiple gemspecs found")
     end
     gemspec = gemspecs[0]
 
-    # check if the same gem has been installed
-    specobj = eval File.read(gemspec)
-    unless options[:force]
-      Gem::Specification.find_all do |spec|
-        if spec.name == specobj.name and
-           spec.version == specobj.version
-           err = "#{spec.name} #{spec.version} has already been installed"
-           raise ArgumentError.new(err)
+    # load gemspec file
+    spec = eval File.read(gemspec)
+    name, version = spec.name, spec.version
+
+    # prevent overriding
+    unless options[:override]
+      find_gem_versions(name).each do |vsn|
+        if vsn == version
+          err = "#{name} #{version} has already been installed"
+          raise Gem::Exception.new(err)
         end
       end
     end
 
-    # build gem
-    return unless system("gem build #{gemspec}")
+    # build and install
+    build_gem gemspec
+    install_gem "#{name}-#{version}.gem"
+  end
 
-    # install gem
-    gem = "#{specobj.name}-#{specobj.version}.gem"
-    system("gem install #{gem}")
+  # Find installed versions of the gem.
+  # Return a sequence of Gem::Version instances.
+  def find_gem_versions(name)
+    find_gem_specs(name).map{|spec| spec.version}
+  end
+
+  # Find installed versions of the gem.
+  # Return a sequence of Gem::Specification instances.
+  def find_gem_specs(name)
+    if Gem::Specification.respond_to? :find_all_by_name
+      Gem::Specification.find_all_by_name name
+    elsif Gem.respond_to? :source_index and
+      Gem.source_index.respond_to? :find_name
+      Gem.source_index.find_name name
+    else
+      raise Gem::Exception.new("unsupported gem version")
+    end
+  end
+
+  # Build a gem from a gemspec file.
+  # e.g. gem-insturl.gemspec -> gem-insturl-0.1.0.gem
+  def build_gem(gemspec_file)
+    Gem::Commands::BuildCommand.new.invoke gemspec_file
+  end
+
+  # Install a gem.
+  # e.g. gem-insturl-0.1.0.gem
+  def install_gem(gem_file)
+    Gem::Commands::InstallCommand.new.invoke gem_file
   end
   
 end # class Gem::Commands::InsturlCommand

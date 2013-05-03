@@ -1,7 +1,7 @@
 Gem::Specification.new do |s|
   s.name        = "gem-insturl"
-  s.version     = "0.1.0"
-  s.date        = "2013-05-02"
+  s.version     = "0.1.1"
+  s.date        = "2013-05-03"
 
   s.summary     = "Gem plugin that installs a gem from a URL"
   s.description = <<EOF
@@ -22,5 +22,5 @@ EOF
                   ["README.md", "VERSION", "gem-insturl.gemspec"]
 
   s.platform    = Gem::Platform::RUBY
-  s.required_ruby_version = ">= 1.9.1"
+  s.required_ruby_version = ">= 1.8.7"
 end

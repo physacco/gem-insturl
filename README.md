@@ -29,4 +29,4 @@ If it is a git repository or .zip/.tar.gz package, then it must have a valid **g
 Requirements
 -------------
 
-Ruby *>= 1.9.1* is required. I am not sure if it could work on *1.8.7*.
+Ruby *>= 1.8.7* is tested. Rubygems *>= 1.3.7* is tested.
