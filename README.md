@@ -15,16 +15,17 @@ Usage
 
 Examples:
 
-* gem insturl *http://foo.com/bar.gem*
-* gem insturl *http://foo.com/bar.tar.gz*
-* gem insturl --git *http://foo.com/bar.git*
+* gem **insturl** http://.../foo.git
+* gem **insturl** http://.../foo.gem
+* gem **insturl** http://.../foo.tar.gz
 
-If --git is specified, the gem is fetched by `git clone URL`;
-otherwise it is downloaded with `wget` (you must have [wget](http://www.gnu.org/software/wget/) in PATH)
+If --git is specified or the URL ends with .git, it is treated as a git repository and cloned with `git`;
+otherwise it is treated as a package file and downloaded with `wget`. You must have git or wget installed in PATH.
 
-If the URL ends with `.gem`, it is directly installed with `gem install GEMNAME` after download.
+If --git is omitted and the URL ends with .gem, it is installed with `gem install` directly after download.
 
-If it is a git repository or .zip/.tar.gz package, then it must have a valid **gemspec** file in top level directory.
+If the URL is a repository or a .zip/.tar.gz package, it must have a valid *gemspec* file in top level directory.
+A gem is built from the gemspec file and then installed.
 
 Requirements
 -------------

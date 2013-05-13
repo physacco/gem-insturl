@@ -1,6 +1,3 @@
-require 'rubygems/commands/build_command'
-require 'rubygems/commands/install_command'
-
 class Gem::Commands::InsturlCommand < Gem::Command
 
   def initialize
@@ -20,30 +17,28 @@ class Gem::Commands::InsturlCommand < Gem::Command
 The insturl command installs a gem from a URL.
 
 Examples:
-  * gem insturl http://foo.com/bar.gem
-  * gem insturl http://foo.com/bar.tar.gz
-  * gem insturl --git http://foo.com/bar.git
+  * gem insturl http://.../foo.git
+  * gem insturl http://.../foo.gem
+  * gem insturl http://.../foo.tar.gz
 
 Download:
-  If --git is specified, the URL is treated as a repository and cloned
-  with `git`; otherwise it is treated as a package file and downloaded
-  with `wget`. You must have git or wget installed in PATH.
+  If --git is specified or the URL ends with .git, it is treated as a
+  git repository and cloned with `git`; otherwise it is treated as a
+  package file and downloaded with `wget`. You must have git or wget
+  installed in PATH.
 
 Installation:
   If --git is omitted and the URL ends with .gem, it is installed with
   `gem install` directly after download.
 
-  If the URL is a repository or .zip/.tar.gz package, it must have a
+  If the URL is a repository or a .zip/.tar.gz package, it must have a
   valid *gemspec* file in top level directory. A gem is built from the
   gemspec file and then installed.
 EOF
   end
   
   def arguments
-    <<EOF
-URL        location of the package or git repository
-           If --git not set, URL should end with .gem/.zip/.tar.gz
-EOF
+    "URL        location of the package or git repository"
   end
   
   def usage
@@ -51,56 +46,91 @@ EOF
   end
   
   def execute
-    require 'tempfile'
-    require 'fileutils'
-
     url = options[:args].first
     raise Gem::Exception.new("URL is missing") if url.nil?
 
     # check package format
-    unless options[:git]
-      pkgname = File.basename url
-      unless pkgname.end_with? ".gem" or
-             pkgname.end_with? ".zip" or
-             pkgname.end_with? ".tar.gz"
-        raise Gem::Exception.new("unsupported package format")
-      end
-    end
+    format = determine_package_format url, options
 
+    require 'tempfile'
     dir = Dir.mktmpdir
     begin
-      if options[:git]
-        return unless system("git clone #{url} #{dir}")
-
-        Dir.chdir dir do
-          install_gemspec
-        end
-      else
-        Dir.chdir dir do
-          # download
-          return unless system("wget -O #{pkgname} #{url}")
-
-          if pkgname.end_with? ".gem"
-            install_gem pkgname
-          else
-            # extract
-            if pkgname.end_with? ".zip"
-              return unless system("unzip #{pkgname}")
-            else
-              return unless system("tar xzf #{pkgname}")
-            end
-
-            # get dirname (FIXME)
-            dir2 = File.basename pkgname, ".zip"
-
-            Dir.chdir dir2 do
-              install_gemspec
-            end
-          end
-        end
+      Dir.chdir dir do
+        send "install_from_#{format}", url
       end
     ensure
+      require 'fileutils'
       FileUtils.rm_rf dir
+    end
+  end
+
+  def determine_package_format(url, options={})
+    return :git if options[:git]
+
+    name = File.basename url
+    if name.end_with? ".git"
+      :git
+    elsif name.end_with? ".gem"
+      :gem
+    elsif name.end_with? ".tgz"
+      :tgz
+    elsif name.end_with? ".tar.gz"
+      :tgz
+    elsif name.end_with? ".zip"
+      :zip
+    else
+      raise Gem::FormatException, "unsupported package format"
+    end
+  end
+
+  def install_from_git(url)
+    return unless system("git clone #{url}")
+
+    topdir = subdirs_in_cwd.first
+
+    Dir.chdir topdir do
+      install_gemspec
+    end
+  end
+
+  def install_from_gem(url)
+    return unless system("wget #{url}")
+
+    pkgname = files_in_cwd.first
+
+    # extract gemspec
+    spec = get_gem_spec pkgname
+    name, version = spec.name, spec.version
+    prevent_overriding(name, version) unless options[:override]
+
+    install_gem pkgname
+  end
+
+  def install_from_tgz(url)
+    return unless system("wget #{url}")
+
+    pkgname = files_in_cwd.first
+
+    return unless system("tar xzf #{pkgname}")
+
+    topdir = subdirs_in_cwd.first
+
+    Dir.chdir topdir do
+      install_gemspec
+    end
+  end
+
+  def install_from_zip(url)
+    return unless system("wget #{url}")
+
+    pkgname = files_in_cwd.first
+
+    return unless system("unzip #{pkgname}")
+
+    topdir = subdirs_in_cwd.first
+
+    Dir.chdir topdir do
+      install_gemspec
     end
   end
   
@@ -118,20 +148,21 @@ EOF
     # load gemspec file
     spec = eval File.read(gemspec)
     name, version = spec.name, spec.version
-
-    # prevent overriding
-    unless options[:override]
-      find_gem_versions(name).each do |vsn|
-        if vsn == version
-          err = "#{name} #{version} has already been installed"
-          raise Gem::Exception.new(err)
-        end
-      end
-    end
+    prevent_overriding(name, version) unless options[:override]
 
     # build and install
     build_gem gemspec
     install_gem "#{name}-#{version}.gem"
+  end
+
+  # Abort if the gem has already been installed.
+  def prevent_overriding(name, version)
+    find_gem_versions(name).each do |vsn|
+      if vsn == version
+        err = "#{name} #{version} has already been installed"
+        raise Gem::Exception.new(err)
+      end
+    end
   end
 
   # Find installed versions of the gem.
@@ -156,13 +187,39 @@ EOF
   # Build a gem from a gemspec file.
   # e.g. gem-insturl.gemspec -> gem-insturl-0.1.0.gem
   def build_gem(gemspec_file)
+    require 'rubygems/commands/build_command'
     Gem::Commands::BuildCommand.new.invoke gemspec_file
   end
 
   # Install a gem.
   # e.g. gem-insturl-0.1.0.gem
   def install_gem(gem_file)
+    require 'rubygems/commands/install_command'
     Gem::Commands::InstallCommand.new.invoke gem_file
+  end
+
+  # Get specification of a gem file.
+  # Return a Gem::Specification instance.
+  def get_gem_spec(gem_file)
+    begin
+      require 'rubygems/format'
+      Gem::Format.from_file_by_path(gem_file).spec
+    rescue LoadError
+      require 'rubygems/package'
+      Gem::Package.new(gem_file).spec
+    end
+  end
+
+  # List files in current directory.
+  # Return an Array of String.
+  def files_in_cwd
+    Dir["*"].delete_if{|ent| !File.file?(ent)}
+  end
+
+  # List subdirectories in current directory.
+  # Return an Array of String.
+  def subdirs_in_cwd
+    Dir["*"].delete_if{|ent| !File.directory?(ent)}
   end
   
 end # class Gem::Commands::InsturlCommand
